@@ -78,17 +78,13 @@ class TFLiteHelper {
 
       _interpreter.runForMultipleInputs([input], outputs);
 
-      // Debug shapes
-
-      // Get actual count of valid detections
       int count = outputCount[0].toInt();
       List<Map<String, dynamic>> detections = [];
 
       // Process only valid detections
       for (int i = 0; i < count; i++) {
         double score = outputScores[0][i];
-        if (score > 0.5) {
-          // You can adjust this threshold
+        if (score > 0.3) {
           int classId = outputLabels[0][i].toInt();
           String label = _labels[classId] ?? 'Unknown';
           List<double> box = [
