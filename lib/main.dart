@@ -1,23 +1,18 @@
-// lib/main.dart
+import 'package:camera_tflite/bounding_box_painter.dart';
 import 'package:flutter/material.dart';
 import 'package:camera/camera.dart';
 import 'package:flutter/services.dart';
 import 'dart:io';
-import 'package:image/image.dart' as img;
-import 'dart:ui' as ui;
-import 'helper.dart'; // Import the helper
+import 'helper.dart';
 
 void main() async {
-  // Ensure Flutter is initialized
   WidgetsFlutterBinding.ensureInitialized();
 
-  // Set preferred orientations
   await SystemChrome.setPreferredOrientations([
     DeviceOrientation.portraitUp,
     DeviceOrientation.portraitDown,
   ]);
 
-  // Get available cameras
   final cameras = await availableCameras();
 
   runApp(MyApp(cameras: cameras));
@@ -26,7 +21,7 @@ void main() async {
 class MyApp extends StatelessWidget {
   final List<CameraDescription> cameras;
 
-  const MyApp({Key? key, required this.cameras}) : super(key: key);
+  const MyApp({super.key, required this.cameras});
 
   @override
   Widget build(BuildContext context) {
@@ -59,7 +54,7 @@ class MyApp extends StatelessWidget {
 class CameraScreen extends StatefulWidget {
   final List<CameraDescription> cameras;
 
-  const CameraScreen({Key? key, required this.cameras}) : super(key: key);
+  const CameraScreen({super.key, required this.cameras});
 
   @override
   State<CameraScreen> createState() => _CameraScreenState();
@@ -70,26 +65,24 @@ class _CameraScreenState extends State<CameraScreen> {
   late Future<void> _initializeControllerFuture;
   bool _isFrontCamera = false;
   bool _isProcessing = false;
-  double _processingProgress = 0.0; // Track processing progress
+  double _processingProgress = 0.0;
   File? _capturedImage;
   List<Map<String, dynamic>>? _detections;
-  late TFLiteHelper _tfliteHelper; // Use the helper class
+  late TFLiteHelper _tfLite;
 
   @override
   void initState() {
     super.initState();
-    // Initialize camera with back camera first
     _initializeCamera(widget.cameras[0]);
-    // Initialize TFLite helper
-    _tfliteHelper = TFLiteHelper();
+    _tfLite = TFLiteHelper();
     _loadModel();
   }
 
   Future<void> _loadModel() async {
     try {
-      await _tfliteHelper.loadModel();
+      await _tfLite.loadModel();
     } catch (e) {
-      print('Error loading model: $e');
+      debugPrint('Error loading model: $e');
     }
   }
 
@@ -109,15 +102,13 @@ class _CameraScreenState extends State<CameraScreen> {
   @override
   void dispose() {
     _controller.dispose();
-    _tfliteHelper.dispose(); // Dispose the helper
+    _tfLite.dispose();
     super.dispose();
   }
 
   Future<void> _toggleCamera() async {
     final CameraDescription newCamera =
-        _isFrontCamera
-            ? widget.cameras[0] // Back camera
-            : widget.cameras[1]; // Front camera
+        _isFrontCamera ? widget.cameras[0] : widget.cameras[1];
 
     await _controller.dispose();
     _initializeCamera(newCamera);
@@ -135,17 +126,16 @@ class _CameraScreenState extends State<CameraScreen> {
       setState(() {
         _capturedImage = File(image.path);
         _isProcessing = true;
-        _processingProgress = 0.0; // Reset progress
+        _processingProgress = 0.0;
       });
 
-      // Process image immediately without simulated progress
       await _processImage();
 
       setState(() {
         _isProcessing = false;
       });
     } catch (e) {
-      print('Error capturing image: $e');
+      debugPrint('Error capturing image: $e');
       setState(() {
         _isProcessing = false;
       });
@@ -156,16 +146,23 @@ class _CameraScreenState extends State<CameraScreen> {
     if (_capturedImage == null) return;
 
     try {
-      // Use the TFLite helper to process the image
-      final detections = await _tfliteHelper.processImage(_capturedImage!);
+      for (int i = 1; i <= 5; i++) {
+        await Future.delayed(const Duration(milliseconds: 100));
+        setState(() {
+          _processingProgress = i / 5;
+        });
+      }
+
+      final detections = await _tfLite.processImage(_capturedImage!);
 
       if (mounted) {
         setState(() {
           _detections = detections;
+          _processingProgress = 1.0;
         });
       }
     } catch (e) {
-      print('Error processing image: $e');
+      debugPrint('Error processing image: $e');
     }
   }
 
@@ -199,16 +196,12 @@ class _CameraScreenState extends State<CameraScreen> {
                 child: Stack(
                   alignment: Alignment.center,
                   children: [
-                    // Camera preview
                     CameraPreview(_controller),
-
-                    // Camera controls overlay
                     Positioned(
                       bottom: 30,
                       child: Row(
                         mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                         children: [
-                          // Toggle camera button
                           if (widget.cameras.length > 1)
                             IconButton(
                               icon: const Icon(Icons.flip_camera_ios),
@@ -217,7 +210,6 @@ class _CameraScreenState extends State<CameraScreen> {
                               onPressed: _toggleCamera,
                             ),
 
-                          // Capture button
                           GestureDetector(
                             onTap: _captureImage,
                             child: Container(
@@ -240,7 +232,6 @@ class _CameraScreenState extends State<CameraScreen> {
                             ),
                           ),
 
-                          // Placeholder for symmetry
                           const SizedBox(width: 32),
                         ],
                       ),
@@ -307,10 +298,8 @@ class _CameraScreenState extends State<CameraScreen> {
                   : Stack(
                     fit: StackFit.expand,
                     children: [
-                      // Display captured image
                       Image.file(_capturedImage!, fit: BoxFit.contain),
 
-                      // Draw detection boxes
                       if (_detections != null)
                         CustomPaint(
                           painter: BoundingBoxPainter(
@@ -323,7 +312,6 @@ class _CameraScreenState extends State<CameraScreen> {
                   ),
         ),
 
-        // Bottom controls
         Padding(
           padding: const EdgeInsets.all(16.0),
           child: Row(
@@ -351,105 +339,4 @@ class _CameraScreenState extends State<CameraScreen> {
       ],
     );
   }
-}
-
-class BoundingBoxPainter extends CustomPainter {
-  final List<Map<String, dynamic>> detections;
-  final File image;
-
-  BoundingBoxPainter(this.detections, this.image);
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final Map<String, Color> classColors = {
-      'PIH': Colors.red,
-      'PIE': Colors.orange,
-      'Spot': Colors.purple,
-    };
-
-    for (var detection in detections) {
-      final List<double> box = detection['box'];
-      final String label = detection['label'];
-      final double score = detection['score'];
-      final Color boxColor = classColors[label] ?? Colors.red;
-
-      // Calculate scale factors based on canvas size
-      final double imageAspectRatio =
-          box[2] - box[0] > 0 && box[3] - box[1] > 0
-              ? (box[2] - box[0]) / (box[3] - box[1])
-              : 1.0;
-      final double canvasAspectRatio = size.width / size.height;
-
-      double scaleX, scaleY;
-      double offsetX = 0, offsetY = 0;
-
-      if (canvasAspectRatio > imageAspectRatio) {
-        // Canvas is wider than image
-        scaleY =
-            size.height / (box[3] - box[1] > 0 ? box[3] - box[1] + box[1] : 1);
-        scaleX = scaleY;
-        offsetX = (size.width - (box[2] - box[0]) * scaleX) / 2;
-      } else {
-        // Canvas is taller than image
-        scaleX =
-            size.width / (box[2] - box[0] > 0 ? box[2] - box[0] + box[0] : 1);
-        scaleY = scaleX;
-        offsetY = (size.height - (box[3] - box[1]) * scaleY) / 2;
-      }
-
-      // Create paint for the box
-      final boxPaint =
-          Paint()
-            ..color = boxColor
-            ..style = PaintingStyle.stroke
-            ..strokeWidth = 3.0;
-
-      // Create paint for the label background
-      final labelBgPaint =
-          Paint()
-            ..color = boxColor.withOpacity(0.7)
-            ..style = PaintingStyle.fill;
-
-      // Scale and draw the box
-      final Rect rect = Rect.fromLTRB(
-        box[0] * scaleX + offsetX,
-        box[1] * scaleY + offsetY,
-        box[2] * scaleX + offsetX,
-        box[3] * scaleY + offsetY,
-      );
-
-      canvas.drawRect(rect, boxPaint);
-
-      // Draw label text
-      final textStyle = ui.TextStyle(color: Colors.white, fontSize: 14);
-
-      final paragraphBuilder =
-          ui.ParagraphBuilder(ui.ParagraphStyle(textAlign: TextAlign.left))
-            ..pushStyle(textStyle)
-            ..addText('${label}: ${(score * 100).toInt()}%');
-
-      final paragraph =
-          paragraphBuilder.build()..layout(ui.ParagraphConstraints(width: 150));
-
-      // Draw label background
-      canvas.drawRect(
-        Rect.fromLTWH(
-          rect.left,
-          rect.top - paragraph.height - 2,
-          paragraph.width + 8,
-          paragraph.height + 2,
-        ),
-        labelBgPaint,
-      );
-
-      // Draw label text
-      canvas.drawParagraph(
-        paragraph,
-        Offset(rect.left + 4, rect.top - paragraph.height - 2),
-      );
-    }
-  }
-
-  @override
-  bool shouldRepaint(CustomPainter oldDelegate) => true;
 }
