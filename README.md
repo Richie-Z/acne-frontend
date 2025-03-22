@@ -1,4 +1,4 @@
-# camera_tflite
+# acne_frontend
 
 A new Flutter project.
 

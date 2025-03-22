@@ -1,6 +1,6 @@
 {
-    "name": "camera_tflite",
-    "short_name": "camera_tflite",
+    "name": "acne_frontend",
+    "short_name": "acne_frontend",
     "start_url": ".",
     "display": "standalone",
     "background_color": "#0175C2",

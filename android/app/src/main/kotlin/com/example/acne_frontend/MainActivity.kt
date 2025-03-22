@@ -1,4 +1,4 @@
-package com.example.camera_tflite
+package com.example.acne_frontend
 
 import io.flutter.embedding.android.FlutterActivity
 

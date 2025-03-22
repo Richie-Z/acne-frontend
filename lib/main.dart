@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
-import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:camera/camera.dart';
@@ -77,7 +76,8 @@ class _CameraScreenState extends State<CameraScreen> {
   File? _capturedImage;
   Uint8List? _resultImageBytes;
   int _detectionCount = 0;
-  String _apiUrl = 'http://10.0.35.97:5200';
+  String _apiUrl =
+      'https://f388-2001-7c0-31ff-1-51f5-2aec-1194-3659.ngrok-free.app/';
   String? _savedImagePath;
 
   final ImagePicker _picker = ImagePicker();
