@@ -1,9 +1,15 @@
-import 'package:camera_tflite/bounding_box_painter.dart';
-import 'package:flutter/material.dart';
-import 'package:camera/camera.dart';
-import 'package:flutter/services.dart';
+import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
-import 'helper.dart';
+import 'dart:typed_data';
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:camera/camera.dart';
+import 'package:http/http.dart' as http;
+import 'package:image_picker/image_picker.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:share_plus/share_plus.dart';
+import 'package:saver_gallery/saver_gallery.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -13,6 +19,7 @@ void main() async {
     DeviceOrientation.portraitDown,
   ]);
 
+  // Get available cameras
   final cameras = await availableCameras();
 
   runApp(MyApp(cameras: cameras));
@@ -65,25 +72,20 @@ class _CameraScreenState extends State<CameraScreen> {
   late Future<void> _initializeControllerFuture;
   bool _isFrontCamera = false;
   bool _isProcessing = false;
+  bool _isSaving = false;
   double _processingProgress = 0.0;
   File? _capturedImage;
-  List<Map<String, dynamic>>? _detections;
-  late TFLiteHelper _tfLite;
+  Uint8List? _resultImageBytes;
+  int _detectionCount = 0;
+  String _apiUrl = 'http://10.0.35.97:5200';
+  String? _savedImagePath;
+
+  final ImagePicker _picker = ImagePicker();
 
   @override
   void initState() {
     super.initState();
     _initializeCamera(widget.cameras[0]);
-    _tfLite = TFLiteHelper();
-    _loadModel();
-  }
-
-  Future<void> _loadModel() async {
-    try {
-      await _tfLite.loadModel();
-    } catch (e) {
-      debugPrint('Error loading model: $e');
-    }
   }
 
   void _initializeCamera(CameraDescription camera) {
@@ -102,11 +104,12 @@ class _CameraScreenState extends State<CameraScreen> {
   @override
   void dispose() {
     _controller.dispose();
-    _tfLite.dispose();
     super.dispose();
   }
 
   Future<void> _toggleCamera() async {
+    if (widget.cameras.length < 2) return;
+
     final CameraDescription newCamera =
         _isFrontCamera ? widget.cameras[0] : widget.cameras[1];
 
@@ -127,50 +130,228 @@ class _CameraScreenState extends State<CameraScreen> {
         _capturedImage = File(image.path);
         _isProcessing = true;
         _processingProgress = 0.0;
+        _savedImagePath = null;
       });
 
-      await _processImage();
-
+      await _processImage(_capturedImage!);
+    } catch (e) {
+      debugPrint('Error capturing image: $e');
       setState(() {
         _isProcessing = false;
       });
+
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Error capturing image: $e')));
+    }
+  }
+
+  Future<void> _pickImage() async {
+    try {
+      final XFile? pickedFile = await _picker.pickImage(
+        source: ImageSource.gallery,
+      );
+
+      if (pickedFile != null) {
+        setState(() {
+          _capturedImage = File(pickedFile.path);
+          _isProcessing = true;
+          _processingProgress = 0.0;
+          _savedImagePath = null;
+        });
+
+        await _processImage(_capturedImage!);
+      }
     } catch (e) {
-      debugPrint('Error capturing image: $e');
+      debugPrint('Error picking image: $e');
+      setState(() {
+        _isProcessing = false;
+      });
+
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Error picking image: $e')));
+    }
+  }
+
+  Future<void> _processImage(File imageFile) async {
+    try {
+      // Simulate processing stages with progress
+      for (int i = 1; i <= 5; i++) {
+        await Future.delayed(const Duration(milliseconds: 200));
+        if (mounted) {
+          setState(() {
+            _processingProgress = i / 5;
+          });
+        }
+      }
+
+      // Read image file as bytes
+      final bytes = await imageFile.readAsBytes();
+
+      // Encode as base64
+      final base64Image = base64Encode(bytes);
+
+      // Send to API
+      final response = await http.post(
+        Uri.parse('$_apiUrl/predict_base64'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({'image': base64Image}),
+      );
+
+      if (response.statusCode == 200) {
+        final result = jsonDecode(response.body);
+
+        if (result.containsKey('result_image')) {
+          setState(() {
+            _resultImageBytes = base64Decode(result['result_image']);
+            _detectionCount = result['count'] ?? 0;
+            _isProcessing = false;
+            _processingProgress = 1.0;
+          });
+        } else {
+          throw Exception('Invalid response from server');
+        }
+      } else {
+        throw Exception('Server error: ${response.statusCode}');
+      }
+    } catch (e) {
+      debugPrint('Error processing image: $e');
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Error processing image: $e')));
+
       setState(() {
         _isProcessing = false;
       });
     }
   }
 
-  Future<void> _processImage() async {
-    if (_capturedImage == null) return;
+  Future<void> _saveImage() async {
+    if (_resultImageBytes == null) return;
+
+    setState(() {
+      _isSaving = true;
+    });
 
     try {
-      for (int i = 1; i <= 5; i++) {
-        await Future.delayed(const Duration(milliseconds: 100));
-        setState(() {
-          _processingProgress = i / 5;
-        });
-      }
+      // Get the temporary directory
+      final directory = await getTemporaryDirectory();
+      final timestamp = DateTime.now().millisecondsSinceEpoch;
+      final path = '${directory.path}/acne_detection_$timestamp.jpg';
 
-      final detections = await _tfLite.processImage(_capturedImage!);
+      // Save the image to a file
+      final File imageFile = File(path);
+      await imageFile.writeAsBytes(_resultImageBytes!);
 
-      if (mounted) {
-        setState(() {
-          _detections = detections;
-          _processingProgress = 1.0;
-        });
+      // Save to gallery
+      final success = await SaverGallery.saveImage(
+        _resultImageBytes!,
+        fileName: 'acne_detection_$timestamp.jpg',
+        skipIfExists: false,
+      );
+
+      setState(() {
+        _isSaving = false;
+        _savedImagePath = imageFile.path;
+      });
+
+      if (success == true) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Image saved to gallery')));
+      } else {
+        throw Exception('Failed to save to gallery');
       }
     } catch (e) {
-      debugPrint('Error processing image: $e');
+      debugPrint('Error saving image: $e');
+      setState(() {
+        _isSaving = false;
+      });
+
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Error saving image: $e')));
+    }
+  }
+
+  Future<void> _shareImage() async {
+    if (_resultImageBytes == null) return;
+
+    try {
+      // Create a temporary file if we don't have a saved path
+      String filePath;
+      if (_savedImagePath != null) {
+        filePath = _savedImagePath!;
+      } else {
+        final directory = await getTemporaryDirectory();
+        final timestamp = DateTime.now().millisecondsSinceEpoch;
+        filePath = '${directory.path}/acne_detection_$timestamp.jpg';
+
+        // Save the image to a file
+        final File imageFile = File(filePath);
+        await imageFile.writeAsBytes(_resultImageBytes!);
+      }
+
+      // Share the image
+      await Share.shareXFiles(
+        [XFile(filePath)],
+        text:
+            'Acne Detection Results: Found $_detectionCount ${_detectionCount == 1 ? 'issue' : 'issues'}',
+      );
+    } catch (e) {
+      debugPrint('Error sharing image: $e');
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Error sharing image: $e')));
     }
   }
 
   void _resetCamera() {
     setState(() {
       _capturedImage = null;
-      _detections = null;
+      _resultImageBytes = null;
+      _detectionCount = 0;
+      _savedImagePath = null;
     });
+  }
+
+  void _updateApiUrl() {
+    showDialog(
+      context: context,
+      builder: (context) {
+        String newUrl = _apiUrl;
+
+        return AlertDialog(
+          title: const Text('Update API URL'),
+          content: TextField(
+            decoration: const InputDecoration(
+              hintText: 'Enter API URL',
+              helperText: 'Example: http://192.168.1.100:5000',
+            ),
+            onChanged: (value) {
+              newUrl = value;
+            },
+            controller: TextEditingController(text: _apiUrl),
+          ),
+          actions: [
+            TextButton(
+              child: const Text('Cancel'),
+              onPressed: () => Navigator.pop(context),
+            ),
+            TextButton(
+              child: const Text('Save'),
+              onPressed: () {
+                setState(() {
+                  _apiUrl = newUrl;
+                });
+                Navigator.pop(context);
+              },
+            ),
+          ],
+        );
+      },
+    );
   }
 
   @override
@@ -180,6 +361,12 @@ class _CameraScreenState extends State<CameraScreen> {
         title: const Text('Acne Detection'),
         elevation: 0,
         backgroundColor: Colors.transparent,
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.settings),
+            onPressed: _updateApiUrl,
+          ),
+        ],
       ),
       body: _capturedImage == null ? _buildCameraView() : _buildResultView(),
     );
@@ -232,7 +419,12 @@ class _CameraScreenState extends State<CameraScreen> {
                             ),
                           ),
 
-                          const SizedBox(width: 32),
+                          IconButton(
+                            icon: const Icon(Icons.photo_library),
+                            color: Colors.white,
+                            iconSize: 32,
+                            onPressed: _pickImage,
+                          ),
                         ],
                       ),
                     ),
@@ -295,44 +487,79 @@ class _CameraScreenState extends State<CameraScreen> {
                       ],
                     ),
                   )
-                  : Stack(
-                    fit: StackFit.expand,
-                    children: [
-                      Image.file(_capturedImage!, fit: BoxFit.contain),
-
-                      if (_detections != null)
-                        CustomPaint(
-                          painter: BoundingBoxPainter(
-                            _detections!,
-                            _capturedImage!,
-                          ),
-                          size: Size.infinite,
-                        ),
-                    ],
-                  ),
+                  : _resultImageBytes != null
+                  ? Image.memory(_resultImageBytes!, fit: BoxFit.contain)
+                  : Image.file(_capturedImage!, fit: BoxFit.contain),
         ),
-
         Padding(
           padding: const EdgeInsets.all(16.0),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+          child: Column(
             children: [
-              ElevatedButton.icon(
-                icon: const Icon(Icons.camera_alt),
-                label: const Text('New Capture'),
-                onPressed: _resetCamera,
-                style: ElevatedButton.styleFrom(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 24,
-                    vertical: 12,
+              if (_resultImageBytes != null && !_isProcessing)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 16.0),
+                  child: Text(
+                    'Found: $_detectionCount ${_detectionCount == 1 ? 'issue' : 'issues'}',
+                    style: const TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.bold,
+                    ),
                   ),
                 ),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                children: [
+                  ElevatedButton.icon(
+                    icon: const Icon(Icons.camera_alt),
+                    label: const Text('New Capture'),
+                    onPressed: _resetCamera,
+                    style: ElevatedButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 16,
+                        vertical: 12,
+                      ),
+                    ),
+                  ),
+                  if (_resultImageBytes != null && !_isProcessing)
+                    ElevatedButton.icon(
+                      icon:
+                          _isSaving
+                              ? SizedBox(
+                                width: 18,
+                                height: 18,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                  color:
+                                      Theme.of(context).colorScheme.onPrimary,
+                                ),
+                              )
+                              : Icon(
+                                _savedImagePath != null
+                                    ? Icons.check
+                                    : Icons.save,
+                              ),
+                      label: Text(
+                        _savedImagePath != null ? 'Saved' : 'Save Image',
+                      ),
+                      onPressed:
+                          _isSaving || _savedImagePath != null
+                              ? null
+                              : _saveImage,
+                      style: ElevatedButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 16,
+                          vertical: 12,
+                        ),
+                      ),
+                    ),
+                  if (_resultImageBytes != null && !_isProcessing)
+                    IconButton(
+                      icon: const Icon(Icons.share),
+                      onPressed: _shareImage,
+                      tooltip: 'Share Image',
+                    ),
+                ],
               ),
-              if (_detections != null && _detections!.isNotEmpty)
-                Text(
-                  'Found: ${_detections!.length} ${_detections!.length == 1 ? 'issue' : 'issues'}',
-                  style: const TextStyle(fontWeight: FontWeight.bold),
-                ),
             ],
           ),
         ),
